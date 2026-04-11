@@ -9,6 +9,7 @@ NB_COLS = 24
 N = 2304
 M = 384
 K = 1920
+CODE_RATE = K / N
 
 # Paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
