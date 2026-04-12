@@ -14,59 +14,114 @@ from channel import (
 )
 
 
-def main() -> None:
-    base_matrix = load_base_matrix(BMAT_PATH)
-    print("Base matrix loaded successfully.")
-    print(f"Base matrix shape: {base_matrix.shape}")
-    print(base_matrix)
+def print_section(title: str) -> None:
+    print("\n" + "=" * 70)
+    print(title)
+    print("=" * 70)
 
-    if base_matrix.shape != (NB_ROWS, NB_COLS):
+
+def print_status(label: str, passed: bool) -> None:
+    status = "PASS" if passed else "FAIL"
+    print(f"{label:<45}: {status}")
+
+
+def format_vector(vec: np.ndarray, length: int = 10, decimals: int | None = None) -> str:
+    sample = vec[:length]
+    if decimals is not None:
+        sample = np.round(sample.astype(float), decimals)
+    return np.array2string(sample, separator=", ")
+
+
+def main() -> None:
+    rng = np.random.default_rng(seed=42)
+
+    # ------------------------------------------------------------------
+    # 1) LOAD BASE MATRIX
+    # ------------------------------------------------------------------
+    print_section("1. BASE MATRIX LOADING")
+
+    base_matrix = load_base_matrix(BMAT_PATH)
+    base_shape_ok = base_matrix.shape == (NB_ROWS, NB_COLS)
+
+    print(f"Base matrix file        : {BMAT_PATH.name}")
+    print(f"Expected shape          : ({NB_ROWS}, {NB_COLS})")
+    print(f"Loaded shape            : {base_matrix.shape}")
+    print_status("Base matrix shape check", base_shape_ok)
+
+    if not base_shape_ok:
         raise ValueError(
             f"Unexpected base matrix shape: {base_matrix.shape}. "
             f"Expected: {(NB_ROWS, NB_COLS)}"
         )
 
-    h_matrix = expand_base_matrix(base_matrix, Z)
-    print("\nExpanded parity-check matrix H created successfully.")
-    print(f"H shape: {h_matrix.shape}")
+    print("First row of base matrix:")
+    print(base_matrix[0])
 
-    if h_matrix.shape != (M, N):
+    # ------------------------------------------------------------------
+    # 2) BUILD FULL PARITY-CHECK MATRIX H
+    # ------------------------------------------------------------------
+    print_section("2. QC-LDPC PARITY-CHECK MATRIX EXPANSION")
+
+    h_matrix = expand_base_matrix(base_matrix, Z)
+    h_shape_ok = h_matrix.shape == (M, N)
+
+    print(f"Expansion factor Z      : {Z}")
+    print(f"Expected H shape        : ({M}, {N})")
+    print(f"Computed H shape        : {h_matrix.shape}")
+    print(f"H dtype                 : {h_matrix.dtype}")
+    print(f"Number of ones in H     : {int(h_matrix.sum())}")
+    print_status("Parity-check matrix size check", h_shape_ok)
+
+    if not h_shape_ok:
         raise ValueError(
             f"Unexpected H shape: {h_matrix.shape}. Expected: {(M, N)}"
         )
 
-    print("\nSanity checks passed.")
-    print(f"H dtype: {h_matrix.dtype}")
-    print(f"Number of ones in H: {h_matrix.sum()}")
+    # ------------------------------------------------------------------
+    # 3) SYNDROME CHECKER TESTS
+    # ------------------------------------------------------------------
+    print_section("3. SYNDROME CHECKER VALIDATION")
 
-    # Syndrome checker tests
     zero_codeword = np.zeros(N, dtype=np.uint8)
     zero_syndrome = compute_syndrome(h_matrix, zero_codeword)
+    zero_ok = is_codeword(h_matrix, zero_codeword)
 
-    print("\nSyndrome checker tests:")
-    print(f"Zero vector syndrome weight: {zero_syndrome.sum()}")
-    print(f"Is zero vector a valid codeword? {is_codeword(h_matrix, zero_codeword)}")
-
-    rng = np.random.default_rng(seed=42)
     random_vector = rng.integers(0, 2, size=N, dtype=np.uint8)
     random_syndrome = compute_syndrome(h_matrix, random_vector)
+    random_ok = not is_codeword(h_matrix, random_vector)
 
-    print(f"Random vector syndrome weight: {random_syndrome.sum()}")
-    print(f"Is random vector a valid codeword? {is_codeword(h_matrix, random_vector)}")
+    print(f"Zero vector syndrome weight      : {int(zero_syndrome.sum())}")
+    print_status("All-zero vector is a valid codeword", zero_ok)
 
-    # Encoder test
+    print(f"Random vector syndrome weight    : {int(random_syndrome.sum())}")
+    print_status("Random vector is rejected", random_ok)
+
+    # ------------------------------------------------------------------
+    # 4) ENCODER TEST
+    # ------------------------------------------------------------------
+    print_section("4. SYSTEMATIC LDPC ENCODER TEST")
+
     message_bits = rng.integers(0, 2, size=K, dtype=np.uint8)
     codeword = encode_message(h_matrix, message_bits, K)
     codeword_syndrome = compute_syndrome(h_matrix, codeword)
 
-    print("\nEncoder test:")
-    print(f"Message length: {message_bits.shape[0]}")
-    print(f"Codeword length: {codeword.shape[0]}")
-    print(f"Codeword syndrome weight: {codeword_syndrome.sum()}")
-    print(f"Is encoded vector a valid codeword? {is_codeword(h_matrix, codeword)}")
+    encoder_ok = is_codeword(h_matrix, codeword)
 
-    # Channel-model test
+    print(f"Message length           : {message_bits.shape[0]}")
+    print(f"Codeword length          : {codeword.shape[0]}")
+    print(f"Codeword syndrome weight : {int(codeword_syndrome.sum())}")
+    print_status("Encoded vector is a valid codeword", encoder_ok)
+
+    print("Message bits sample      :", format_vector(message_bits, length=20))
+    print("Parity bits sample       :", format_vector(codeword[K:], length=20))
+
+    # ------------------------------------------------------------------
+    # 5) CHANNEL MODEL TEST
+    # ------------------------------------------------------------------
+    print_section("5. CHANNEL MODEL TEST (BPSK + AWGN + LLR)")
+
     ebn0_db = 3.0
+
     tx_symbols = bpsk_modulate(codeword)
     received, sigma2 = add_awgn_noise(tx_symbols, ebn0_db, CODE_RATE, rng=rng)
     llr = llr_awgn(received, sigma2)
@@ -77,30 +132,47 @@ def main() -> None:
     raw_channel_bit_errors = int(np.sum(hard_bits_rx != codeword))
     llr_consistency_errors = int(np.sum(hard_bits_rx != hard_bits_llr))
 
-    print("\nChannel model test:")
-    print(f"Eb/N0 (dB): {ebn0_db}")
-    print(f"Code rate: {CODE_RATE:.6f}")
-    print(f"Noise variance sigma^2: {sigma2:.6f}")
-    print(f"Transmitted symbol length: {tx_symbols.shape[0]}")
-    print(f"Received sample length: {received.shape[0]}")
-    print(f"LLR length: {llr.shape[0]}")
-    print(f"Raw channel bit errors after hard slicing: {raw_channel_bit_errors}")
-    print(f"Received-hard vs LLR-hard mismatches: {llr_consistency_errors}")
+    channel_lengths_ok = (
+        tx_symbols.shape[0] == N and
+        received.shape[0] == N and
+        llr.shape[0] == N
+    )
+    llr_consistency_ok = llr_consistency_errors == 0
 
-    print("\nFirst 10 transmitted symbols:")
-    print(tx_symbols[:10])
+    print(f"Eb/N0 (dB)               : {ebn0_db:.2f}")
+    print(f"Code rate                : {CODE_RATE:.6f}")
+    print(f"Noise variance sigma^2   : {sigma2:.6f}")
+    print(f"Raw channel bit errors   : {raw_channel_bit_errors}")
+    print_status("Channel vector lengths are correct", channel_lengths_ok)
+    print_status("Hard decisions agree with LLR signs", llr_consistency_ok)
 
-    print("\nFirst 10 received samples:")
-    print(np.round(received[:10], 4))
+    print("Tx symbols sample        :", format_vector(tx_symbols, length=10, decimals=3))
+    print("Received sample          :", format_vector(received, length=10, decimals=4))
+    print("LLR sample               :", format_vector(llr, length=10, decimals=4))
+    print("Hard bits from received  :", format_vector(hard_bits_rx, length=10))
+    print("Hard bits from LLR       :", format_vector(hard_bits_llr, length=10))
 
-    print("\nFirst 10 LLR values:")
-    print(np.round(llr[:10], 4))
+    # ------------------------------------------------------------------
+    # 6) FINAL SUMMARY
+    # ------------------------------------------------------------------
+    print_section("6. FINAL SUMMARY")
 
-    print("\nFirst 10 hard decisions from received:")
-    print(hard_bits_rx[:10])
+    overall_ok = all([
+        base_shape_ok,
+        h_shape_ok,
+        zero_ok,
+        random_ok,
+        encoder_ok,
+        channel_lengths_ok,
+        llr_consistency_ok,
+    ])
 
-    print("\nFirst 10 hard decisions from LLR:")
-    print(hard_bits_llr[:10])
+    print_status("Base matrix parsed correctly", base_shape_ok)
+    print_status("Parity-check matrix built correctly", h_shape_ok)
+    print_status("Syndrome checker works", zero_ok and random_ok)
+    print_status("Encoder works", encoder_ok)
+    print_status("Channel model works", channel_lengths_ok and llr_consistency_ok)
+    print_status("Overall pipeline status", overall_ok)
 
 
 if __name__ == "__main__":
