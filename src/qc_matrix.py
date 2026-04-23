@@ -10,7 +10,7 @@ def circulant_identity(z: int, shift: int) -> np.ndarray:
 
     shift = shift % z
     identity = np.eye(z, dtype=np.uint8)
-    return np.roll(identity, shift=shift, axis=1)
+    return np.roll(identity, shift=shift, axis=0)
 
 
 def expand_base_matrix(base_matrix: np.ndarray, z: int) -> np.ndarray:
