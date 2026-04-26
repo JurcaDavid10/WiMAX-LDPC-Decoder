@@ -4,7 +4,7 @@ from config import BMAT_PATH, Z, NB_ROWS, NB_COLS, M, N, K, BSC_CROSSOVER_PROB, 
 from base_matrix import load_base_matrix
 from qc_matrix import expand_base_matrix
 from syndrome import compute_syndrome, is_codeword
-from encoder import encode_message
+from encoder import encode_message_qc
 from channel import (
     add_bsc_noise,
     llr_bsc_quantized,
@@ -58,8 +58,9 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 2) BUILD FULL PARITY-CHECK MATRIX H
     # ------------------------------------------------------------------
-    print_section("2. QC-LDPC PARITY-CHECK MATRIX EXPANSION")
+    print_section("2. QC-LDPC PARITY-CHECK MATRIX EXPANSION FOR VALIDATION ONLY")
 
+    # Full H is built only for syndrome validation, not for encoding.
     h_matrix = expand_base_matrix(base_matrix, Z)
     h_shape_ok = h_matrix.shape == (M, N)
 
@@ -97,10 +98,16 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 4) ENCODER TEST
     # ------------------------------------------------------------------
-    print_section("4. SYSTEMATIC LDPC ENCODER TEST")
+    print_section("4. SYSTEMATIC QC-LDPC BASE-MATRIX ENCODER TEST")
 
     message_bits = rng.integers(0, 2, size=K, dtype=np.uint8)
-    codeword = encode_message(h_matrix, message_bits, K)
+
+    # Encoder uses the base matrix, not the full expanded H matrix.
+    codeword = encode_message_qc(base_matrix, message_bits, Z)
+    codeword_length_ok = codeword.shape[0] == N
+    print_status("Codeword length check", codeword_length_ok)
+
+    # Full H is used only for validation.
     codeword_syndrome = compute_syndrome(h_matrix, codeword)
 
     encoder_ok = is_codeword(h_matrix, codeword)
@@ -176,6 +183,7 @@ def main() -> None:
         random_ok,
         encoder_ok,
         channel_lengths_ok,
+        codeword_length_ok,
         llr_consistency_ok,
         error_mask_matches_errors,
         llr_saturation_ok
