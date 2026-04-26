@@ -1,16 +1,14 @@
 import numpy as np
 
-from config import BMAT_PATH, Z, NB_ROWS, NB_COLS, M, N, K, CODE_RATE
+from config import BMAT_PATH, Z, NB_ROWS, NB_COLS, M, N, K, BSC_CROSSOVER_PROB, BSC_LLR_MAGNITUDE, LLR_SATURATION_LIMIT
 from base_matrix import load_base_matrix
 from qc_matrix import expand_base_matrix
 from syndrome import compute_syndrome, is_codeword
 from encoder import encode_message
 from channel import (
-    bpsk_modulate,
-    add_awgn_noise,
-    llr_awgn,
-    hard_decision_from_received,
-    hard_decision_from_llr,
+    add_bsc_noise,
+    llr_bsc_quantized,
+    hard_decision_from_llr
 )
 
 
@@ -118,39 +116,53 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 5) CHANNEL MODEL TEST
     # ------------------------------------------------------------------
-    print_section("5. CHANNEL MODEL TEST (BPSK + AWGN + LLR)")
+    print_section("5. CHANNEL MODEL TEST (BSC + LLR)")
 
-    ebn0_db = 3.0
+    crossover_prob = BSC_CROSSOVER_PROB
 
-    tx_symbols = bpsk_modulate(codeword)
-    received, sigma2 = add_awgn_noise(tx_symbols, ebn0_db, CODE_RATE, rng=rng)
-    llr = llr_awgn(received, sigma2)
+    received_bits, error_mask = add_bsc_noise(
+        codeword,
+        crossover_prob,
+        rng=rng
+    )
 
-    hard_bits_rx = hard_decision_from_received(received)
+    llr = llr_bsc_quantized(
+        received_bits,
+        BSC_LLR_MAGNITUDE,
+        LLR_SATURATION_LIMIT
+    )
     hard_bits_llr = hard_decision_from_llr(llr)
 
-    raw_channel_bit_errors = int(np.sum(hard_bits_rx != codeword))
-    llr_consistency_errors = int(np.sum(hard_bits_rx != hard_bits_llr))
+    raw_channel_bit_errors = int(np.sum(received_bits != codeword))
+    error_mask_matches_errors = raw_channel_bit_errors == int(error_mask.sum())
+
+    llr_consistency_errors = int(np.sum(received_bits != hard_bits_llr))
 
     channel_lengths_ok = (
-        tx_symbols.shape[0] == N and
-        received.shape[0] == N and
+        received_bits.shape[0] == N and
         llr.shape[0] == N
     )
+
     llr_consistency_ok = llr_consistency_errors == 0
 
-    print(f"Eb/N0 (dB)               : {ebn0_db:.2f}")
-    print(f"Code rate                : {CODE_RATE:.6f}")
-    print(f"Noise variance sigma^2   : {sigma2:.6f}")
-    print(f"Raw channel bit errors   : {raw_channel_bit_errors}")
+    llr_saturation_ok = np.all(
+        (llr >= -LLR_SATURATION_LIMIT) &
+        (llr <= LLR_SATURATION_LIMIT)
+    )
+
+    print(f"BSC crossover probability p : {crossover_prob:.4f}")
+    print(f"Raw channel bit errors      : {raw_channel_bit_errors}")
+    print(f"Error mask weight           : {int(error_mask.sum())}")
+    print_status("Error mask matches bit errors", error_mask_matches_errors)
     print_status("Channel vector lengths are correct", channel_lengths_ok)
     print_status("Hard decisions agree with LLR signs", llr_consistency_ok)
+    print_status("LLR values respect saturation", llr_saturation_ok)
 
-    print("Tx symbols sample        :", format_vector(tx_symbols, length=10, decimals=3))
-    print("Received sample          :", format_vector(received, length=10, decimals=4))
-    print("LLR sample               :", format_vector(llr, length=10, decimals=4))
-    print("Hard bits from received  :", format_vector(hard_bits_rx, length=10))
-    print("Hard bits from LLR       :", format_vector(hard_bits_llr, length=10))
+    print("Codeword bits sample        :", format_vector(codeword, length=10))
+    print("Received bits sample        :", format_vector(received_bits, length=10))
+    print("Error mask sample           :", format_vector(error_mask, length=10))
+    print("LLR sample                  :", format_vector(llr, length=10, decimals=4))
+    print("Hard bits from LLR          :", format_vector(hard_bits_llr, length=10))
 
     # ------------------------------------------------------------------
     # 6) FINAL SUMMARY
@@ -165,13 +177,15 @@ def main() -> None:
         encoder_ok,
         channel_lengths_ok,
         llr_consistency_ok,
+        error_mask_matches_errors,
+        llr_saturation_ok
     ])
 
     print_status("Base matrix parsed correctly", base_shape_ok)
     print_status("Parity-check matrix built correctly", h_shape_ok)
     print_status("Syndrome checker works", zero_ok and random_ok)
     print_status("Encoder works", encoder_ok)
-    print_status("Channel model works", channel_lengths_ok and llr_consistency_ok)
+    print_status("Channel model works",channel_lengths_ok and llr_consistency_ok and error_mask_matches_errors and llr_saturation_ok)
     print_status("Overall pipeline status", overall_ok)
 
 
